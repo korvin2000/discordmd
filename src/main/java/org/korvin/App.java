@@ -1,57 +1,84 @@
 package org.korvin;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import org.korvin.json.Discord;
+import org.korvin.json.Message;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.Optional;
 
 public final class App {
+    private static final int EXPECTED_ARGUMENT_COUNT = 2;
+
     private App() {
     }
 
     public static void main(String[] args) {
-        var mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
-
-        Greeting greeting = new Greeting("Hello, World!", Instant.now());
-        System.out.println(mapGreeting(mapper, greeting));
-
-        if (args.length == 0) {
-            System.out.println("Provide a JSON file path as the first argument to inspect its contents.");
+        CliArguments cliArguments = CliArguments.parse(args);
+        if (cliArguments == null) {
+            printUsage();
             return;
         }
 
-        Path jsonPath = Path.of(args[0]);
-        if (!Files.exists(jsonPath)) {
-            System.err.printf("No file found at %s%n", jsonPath.toAbsolutePath());
+        DiscordMdExporter exporter = new DiscordMdExporter();
+
+        try {
+            Discord discord = exporter.readDiscord(cliArguments.source());
+            describe(discord);
+            exporter.writeMarkdown(discord, cliArguments.destination());
+            System.out.printf("Markdown report written to %s%n", cliArguments.destination().toAbsolutePath());
+        } catch (IOException exception) {
+            System.err.printf("%s%n", exception.getMessage());
+            System.exit(1);
+        }
+    }
+
+    private static void describe(Discord discord) {
+        Objects.requireNonNull(discord, "discord");
+        System.out.println("Parsed Discord export");
+        System.out.printf("Guild: %s%n", Optional.ofNullable(discord.getGuild()).map(guild -> guild.getName()).orElse("<unknown>"));
+        System.out.printf("Channel: %s%n", Optional.ofNullable(discord.getChannel()).map(channel -> channel.getName()).orElse("<unknown>"));
+        System.out.printf("Messages: %d%n", Optional.ofNullable(discord.getMessages()).map(messages -> messages.length).orElse(0));
+
+        Message[] messages = Optional.ofNullable(discord.getMessages()).orElse(new Message[0]);
+        if (messages.length == 0) {
+            System.out.println("No messages found.");
             return;
         }
 
-        try {
-            JsonNode tree = mapper.readTree(jsonPath.toFile());
-            System.out.printf("Loaded JSON from %s:%n%s%n", jsonPath.toAbsolutePath(), mapper.writeValueAsString(tree));
-        } catch (IOException ioException) {
-            System.err.printf("Unable to read JSON from %s: %s%n", jsonPath.toAbsolutePath(), ioException.getMessage());
-        }
+        System.out.println("\nMessages:");
+        Arrays.stream(messages)
+                .filter(Objects::nonNull)
+                .forEach(App::printMessageSummary);
     }
 
-    private static String mapGreeting(ObjectMapper mapper, Greeting greeting) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("message", greeting.message());
-        payload.put("timestamp", greeting.timestamp().toString());
-
-        try {
-            return mapper.writeValueAsString(payload);
-        } catch (IOException ioException) {
-            return greeting.message();
-        }
+    private static void printMessageSummary(Message message) {
+        String id = Optional.ofNullable(message.getID()).orElse("<no id>");
+        String content = Optional.ofNullable(message.getContent()).map(String::trim).filter(value -> !value.isEmpty()).orElse("(no content)");
+        System.out.printf("- %s | %s%n", id, content);
     }
 
-    private record Greeting(String message, Instant timestamp) {
+    private static void printUsage() {
+        System.out.println("Usage: java -jar discordmd.jar <source-json> <destination-markdown>");
+    }
+
+    private record CliArguments(Path source, Path destination) {
+        private static CliArguments parse(String[] args) {
+            if (args.length != EXPECTED_ARGUMENT_COUNT) {
+                return null;
+            }
+
+            Path source = Path.of(args[0]);
+            if (!Files.exists(source)) {
+                System.err.printf("Source file %s does not exist.%n", source.toAbsolutePath());
+                return null;
+            }
+
+            Path destination = Path.of(args[1]);
+            return new CliArguments(source, destination);
+        }
     }
 }
