@@ -8,7 +8,8 @@ public class Embed {
     private String description;
     private Field[] fields;
     private Footer footer;
-    private String[] images;
+    private PurpleImage image;
+    private ImageElement[] images;
     private EmbedInlineEmoji[] inlineEmojis;
     private Thumbnail thumbnail;
     private String timestamp;
@@ -41,10 +42,15 @@ public class Embed {
     @JsonProperty("footer")
     public void setFooter(Footer value) { this.footer = value; }
 
+    @JsonProperty("image")
+    public PurpleImage getImage() { return image; }
+    @JsonProperty("image")
+    public void setImage(PurpleImage value) { this.image = value; }
+
     @JsonProperty("images")
-    public String[] getImages() { return images; }
+    public ImageElement[] getImages() { return images; }
     @JsonProperty("images")
-    public void setImages(String[] value) { this.images = value; }
+    public void setImages(ImageElement[] value) { this.images = value; }
 
     @JsonProperty("inlineEmojis")
     public EmbedInlineEmoji[] getInlineEmojis() { return inlineEmojis; }

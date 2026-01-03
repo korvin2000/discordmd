@@ -58,7 +58,7 @@ public final class App {
     private static void printMessageSummary(Message message) {
         String id = Optional.ofNullable(message.getID()).orElse("<no id>");
         String content = Optional.ofNullable(message.getContent()).map(String::trim).filter(value -> !value.isEmpty()).orElse("(no content)");
-        System.out.printf("- %s | %s%n", id, content);
+        //System.out.printf("- %s | %s%n", id, content);
     }
 
     private static void printUsage() {

@@ -1,6 +1,7 @@
 package org.korvin;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import org.apache.commons.lang3.StringUtils;
 import org.korvin.json.Attachment;
 import org.korvin.json.Channel;
 import org.korvin.json.Converter;
@@ -31,7 +32,7 @@ import java.util.stream.Collectors;
  */
 public final class DiscordMdExporter {
 
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     public Discord readDiscord(Path sourcePath) throws IOException {
         String json = Files.readString(sourcePath, StandardCharsets.UTF_8);
@@ -57,6 +58,7 @@ public final class DiscordMdExporter {
         Message[] messages = Optional.ofNullable(discord.getMessages()).orElseGet(() -> new Message[0]);
         List<Message> sortedMessages = Arrays.stream(messages)
                 .filter(Objects::nonNull)
+                .filter(msg -> !Optional.ofNullable(msg.getAuthor()).orElse(new MessageAuthor()).getIsBot())
                 .sorted(Comparator.comparing(Message::getTimestamp, Comparator.nullsLast(String::compareTo)))
                 .toList();
 
@@ -83,12 +85,12 @@ public final class DiscordMdExporter {
                 .append("schema: chatlog-md-v1\n")
                 .append("platform: discord\n")
                 .append("channel: \"").append(metadata.channel()).append("\"\n")
-                .append("channel_id: \"").append(metadata.channelId()).append("\"\n")
+//                .append("channel_id: \"").append(metadata.channelId()).append("\"\n")
                 .append("conversation_from: ").append(metadata.conversationFrom()).append('\n')
                 .append("conversation_to: ").append(metadata.conversationTo()).append('\n')
-                .append("timezone: \"").append(metadata.timezone()).append("\"\n")
+//                .append("timezone: \"").append(metadata.timezone()).append("\"\n")
                 .append("exported_at: ").append(metadata.exportedAt()).append('\n')
-                .append("id_namespace: \"discord\"\n")
+//                .append("id_namespace: \"discord\"\n")
                 .append("---\n\n");
     }
 
@@ -107,15 +109,15 @@ public final class DiscordMdExporter {
         String messageId = formatMessageId(message.getID());
         headingParts.add(messageId);
         headingParts.add("ts=" + formatTimestamp(message.getTimestamp()));
-        headingParts.add("author=" + sanitizeHeadingValue(resolveAuthorName(message)));
-        resolveAuthorId(message).ifPresent(authorId -> headingParts.add("author_id=" + authorId));
+        headingParts.add("user=" + sanitizeHeadingValue(resolveAuthorName(message)));
+        //resolveAuthorId(message).ifPresent(authorId -> headingParts.add("author_id=" + authorId));
 
         boolean isReply = message.getReference() != null;
-        headingParts.add("type=" + (isReply ? "reply" : "message"));
+        //headingParts.add("type=" + (isReply ? "reply" : "message"));
         resolveReplyTarget(message).ifPresent(replyId -> headingParts.add("reply_to=" + replyId));
-        resolveEditedTimestamp(message).ifPresent(edited -> headingParts.add("edited=" + edited));
+        //resolveEditedTimestamp(message).ifPresent(edited -> headingParts.add("edited=" + edited));
 
-        builder.append("### ").append(String.join(" | ", headingParts)).append("\n");
+        builder.append("### ").append(String.join("|", headingParts)).append("\n");
 
         String replyTargetId = resolveReplyTarget(message).orElse(null);
         if (replyTargetId != null) {
@@ -124,7 +126,7 @@ public final class DiscordMdExporter {
 
         builder.append(normalizedContent(message)).append("\n");
         appendAttachments(builder, message.getAttachments());
-        appendReactions(builder, message.getReactions());
+        //appendReactions(builder, message.getReactions());
         builder.append('\n');
     }
 
@@ -132,7 +134,7 @@ public final class DiscordMdExporter {
         builder.append("> **Replying to:** ").append(replyId).append("\n");
         Optional.ofNullable(contentById.get(stripMessagePrefix(replyId)))
                 .map(this::excerpt)
-                .ifPresent(excerpt -> builder.append("> **Quoted (optional):** \"")
+                .ifPresent(excerpt -> builder.append("> **Quote:**\" ")
                         .append(excerpt)
                         .append("\"\n"));
         builder.append('\n');
@@ -144,7 +146,7 @@ public final class DiscordMdExporter {
         }
 
         for (Attachment attachment : attachments) {
-            if (attachment == null) {
+            if (checkAttachment(attachment)) {
                 continue;
             }
             builder.append("- attachment: name=")
@@ -153,6 +155,18 @@ public final class DiscordMdExporter {
             Optional.ofNullable(attachment.getURL()).ifPresent(url -> builder.append(" url=").append(url));
             builder.append("\n");
         }
+    }
+
+    private boolean checkAttachment(Attachment attachment) {
+        if (null == attachment) return true;
+        String name = attachment.getFileName().toLowerCase();
+        if (name.endsWith(".png") || name.endsWith(".webp") || name.endsWith(".jpg")
+           || name.endsWith(".jpeg") || name.endsWith(".mp4") || name.endsWith(".wmv")
+           || name.endsWith(".avi") || name.endsWith(".mkv") || name.endsWith(".webm")
+           || name.endsWith(".asf") || name.endsWith(".avif")|| name.endsWith(".jxl")) {
+            return true;
+        }
+        return false;
     }
 
     private void appendReactions(StringBuilder builder, Reaction[] reactions) {
@@ -182,9 +196,15 @@ public final class DiscordMdExporter {
     }
 
     private String resolveAuthorName(Message message) {
-        return Optional.ofNullable(message.getAuthor())
-                .map(authorValue -> Optional.ofNullable(authorValue.getNickname()).orElse(authorValue.getName()))
-                .orElse("<unknown author>");
+        MessageAuthor author = message.getAuthor();
+        if (null == author) return "";
+        String name = StringUtils.defaultIfBlank(author.getName(), "");
+        String nick = StringUtils.defaultIfBlank(author.getNickname(), "");
+        if (name.length() < nick.length() && name.length() > 0) return name;
+        if (nick.length() < name.length() && nick.length() > 0) return nick;
+        if (nick.length()>0) return nick;
+        if (name.length()>0) return name;
+        return "any";
     }
 
     private Optional<String> resolveAuthorId(Message message) {
@@ -219,7 +239,11 @@ public final class DiscordMdExporter {
     }
 
     private String formatMessageId(String rawId) {
-        return "m:" + Optional.ofNullable(rawId).orElse("unknown");
+        return "m:" + shortId(Optional.ofNullable(rawId).orElse("unknown"));
+    }
+
+    private String shortId(String x) {
+        return Integer.toHexString(x.hashCode());
     }
 
     private String stripMessagePrefix(String messageId) {
@@ -234,7 +258,7 @@ public final class DiscordMdExporter {
                 .map(String::trim)
                 .filter(line -> !line.isEmpty())
                 .collect(Collectors.joining(" "));
-        return singleLine.length() <= 140 ? singleLine : singleLine.substring(0, 137) + "...";
+        return singleLine.length() <= 70 ? singleLine : singleLine.substring(0, 65) + "..";
     }
 
     private String humanReadableSize(long bytes) {
