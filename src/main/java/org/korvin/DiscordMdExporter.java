@@ -11,7 +11,10 @@ import org.korvin.json.MessageAuthor;
 import org.korvin.json.Reaction;
 import org.korvin.json.Reference;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +28,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.regex.Pattern;
 
 /**
  * Utility class for converting Discord export JSON payloads into markdown reports.
@@ -33,6 +38,7 @@ import java.util.stream.Collectors;
 public final class DiscordMdExporter {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final List<String> REMOVAL_TERMS = loadRemovalTerms();
 
     public Discord readDiscord(Path sourcePath) throws IOException {
         String json = Files.readString(sourcePath, StandardCharsets.UTF_8);
@@ -64,11 +70,12 @@ public final class DiscordMdExporter {
 
         Metadata metadata = Metadata.from(discord, sortedMessages);
         Map<String, String> contentById = buildContentIndex(sortedMessages);
+        Set<String> referencedIds = collectReferencedIds(sortedMessages);
 
         StringBuilder builder = new StringBuilder();
         appendFrontMatter(builder, metadata);
         appendHeader(builder, metadata);
-        sortedMessages.forEach(message -> appendMessage(builder, message, contentById));
+        sortedMessages.forEach(message -> appendMessage(builder, message, contentById, referencedIds));
         return builder.toString();
     }
 
@@ -104,7 +111,15 @@ public final class DiscordMdExporter {
                 .append("\n\n");
     }
 
-    private void appendMessage(StringBuilder builder, Message message, Map<String, String> contentById) {
+    private void appendMessage(StringBuilder builder, Message message, Map<String, String> contentById, Set<String> referencedIds) {
+        String content = normalizedContent(message);
+        boolean hasContent = !content.isEmpty();
+        boolean hasAttachments = message.getAttachments() != null && message.getAttachments().length > 0;
+        boolean isReferenced = referencedIds.contains(message.getID());
+        if (!hasContent && !hasAttachments && !isReferenced) {
+            return;
+        }
+
         List<String> headingParts = new ArrayList<>();
         String messageId = formatMessageId(message.getID());
         headingParts.add(messageId);
@@ -124,7 +139,10 @@ public final class DiscordMdExporter {
             appendReplyContext(builder, replyTargetId, contentById);
         }
 
-        builder.append(normalizedContent(message)).append("\n");
+        if (hasContent) {
+            builder.append(content);
+        }
+        builder.append("\n");
         appendAttachments(builder, message.getAttachments());
         //appendReactions(builder, message.getReactions());
         builder.append('\n');
@@ -134,6 +152,7 @@ public final class DiscordMdExporter {
         builder.append("> **Replying to:** ").append(replyId).append("\n");
         Optional.ofNullable(contentById.get(stripMessagePrefix(replyId)))
                 .map(this::excerpt)
+                .filter(excerpt -> !excerpt.isEmpty())
                 .ifPresent(excerpt -> builder.append("> **Quote:**\" ")
                         .append(excerpt)
                         .append("\"\n"));
@@ -226,10 +245,38 @@ public final class DiscordMdExporter {
     }
 
     private String normalizedContent(Message message) {
-        return Optional.ofNullable(message.getContent())
-                .map(String::strip)
-                .filter(value -> !value.isEmpty())
-                .orElse("(no content)");
+        String rawContent = Optional.ofNullable(message.getContent()).orElse("");
+        String purified = purifyContent(rawContent);
+        return purified.isBlank() ? "" : purified.strip();
+    }
+
+    private String purifyContent(String content) {
+        String cleaned = content;
+        for (String term : REMOVAL_TERMS) {
+            if (term.isEmpty()) {
+                continue;
+            }
+            cleaned = cleaned.replaceAll("(?i)" + removalPattern(term), "");
+        }
+
+        cleaned = cleaned.replaceAll("[\\t ]{2,}", " ");
+        cleaned = cleaned.replaceAll("(?m)^\\s+$", "");
+        cleaned = cleaned.replaceAll("\n{3,}", "\n\n");
+        return cleaned.strip();
+    }
+
+    private String removalPattern(String term) {
+        String escaped = Pattern.quote(term);
+        boolean startsWithWord = Character.isLetterOrDigit(term.codePointAt(0));
+        boolean endsWithWord = Character.isLetterOrDigit(term.codePointBefore(term.length()));
+
+        if (startsWithWord) {
+            escaped = "\\b" + escaped;
+        }
+        if (endsWithWord) {
+            escaped = escaped + "\\b";
+        }
+        return escaped;
     }
 
     private String formatTimestamp(String rawTimestamp) {
@@ -244,6 +291,15 @@ public final class DiscordMdExporter {
 
     private String shortId(String x) {
         return Integer.toHexString(x.hashCode());
+    }
+
+    private Set<String> collectReferencedIds(List<Message> messages) {
+        return messages.stream()
+                .map(Message::getReference)
+                .filter(Objects::nonNull)
+                .map(Reference::getMessageID)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
     }
 
     private String stripMessagePrefix(String messageId) {
@@ -272,6 +328,22 @@ public final class DiscordMdExporter {
 
     private String sanitizeHeadingValue(String value) {
         return value.replace("|", "/");
+    }
+
+    private static List<String> loadRemovalTerms() {
+        try (InputStream inputStream = DiscordMdExporter.class.getResourceAsStream("/words.txt")) {
+            if (inputStream == null) {
+                return List.of();
+            }
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+                return reader.lines()
+                        .map(String::trim)
+                        .filter(line -> !line.isEmpty())
+                        .toList();
+            }
+        } catch (IOException ignored) {
+            return List.of();
+        }
     }
 
     private record Metadata(String channel, String channelId, String conversationFrom, String conversationTo, String timezone,
