@@ -38,7 +38,8 @@ import java.util.regex.Pattern;
 public final class DiscordMdExporter {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-    private static final List<String> REMOVAL_TERMS = loadRemovalTerms();
+    private static final List<String> REMOVAL_TERMS = loadRemovalTerms("/filter.txt");
+    private static final List<String> ANSWERS_TERMS = loadRemovalTerms("/answers.txt");
 
     public Discord readDiscord(Path sourcePath) throws IOException {
         String json = Files.readString(sourcePath, StandardCharsets.UTF_8);
@@ -111,17 +112,28 @@ public final class DiscordMdExporter {
                 .append("\n\n");
     }
 
+    private boolean hasAttachments(Message message) {
+        if (message.getAttachments() == null) return false;
+        long count =  Arrays.stream(message.getAttachments()).filter(
+                this::hasAttachment
+        ).count();
+        return count > 0L;
+    }
+
     private void appendMessage(StringBuilder builder, Message message, Map<String, String> contentById, Set<String> referencedIds) {
         String content = normalizedContent(message);
-        boolean hasContent = !content.isEmpty();
-        boolean hasAttachments = message.getAttachments() != null && message.getAttachments().length > 0;
+        String purified = purifyAnswers(content);
+        boolean hasContent = StringUtils.isNotBlank(purified) && purified.length()>1;
+        boolean hasAttachments = hasAttachments(message);
         boolean isReferenced = referencedIds.contains(message.getID());
+
         if (!hasContent && !hasAttachments && !isReferenced) {
             return;
         }
 
         List<String> headingParts = new ArrayList<>();
         String messageId = formatMessageId(message.getID());
+
         headingParts.add(messageId);
         headingParts.add("ts=" + formatTimestamp(message.getTimestamp()));
         headingParts.add("user=" + sanitizeHeadingValue(resolveAuthorName(message)));
@@ -176,6 +188,9 @@ public final class DiscordMdExporter {
         }
     }
 
+    private boolean hasAttachment(Attachment attachment) {
+        return !checkAttachment(attachment);
+    }
     private boolean checkAttachment(Attachment attachment) {
         if (null == attachment) return true;
         String name = attachment.getFileName().toLowerCase();
@@ -250,18 +265,31 @@ public final class DiscordMdExporter {
         return purified.isBlank() ? "" : purified.strip();
     }
 
+    final static String EMPTY = "".intern();
+    final static Pattern PTR_DBL_SPACE = Pattern.compile("[\\t ]{2,}");
+    final static Pattern PTR_EMPTY = Pattern.compile("(?m)^\\s+$");
+    final static Pattern PTR_TABL = Pattern.compile("\n{3,}");
+
+
     private String purifyContent(String content) {
+        return preprocessString(content, REMOVAL_TERMS);
+    }
+    private String purifyAnswers(String content) {
+        return preprocessString(content, ANSWERS_TERMS);
+    }
+
+    private String preprocessString(String content, List<String> terms) {
         String cleaned = content;
-        for (String term : REMOVAL_TERMS) {
+        for (String term : terms) {
             if (term.isEmpty()) {
                 continue;
             }
             cleaned = cleaned.replaceAll("(?i)" + removalPattern(term), "");
+            //cleaned = org.korvin.StringUtils.replace(cleaned, term, EMPTY);
         }
-
-        cleaned = cleaned.replaceAll("[\\t ]{2,}", " ");
-        cleaned = cleaned.replaceAll("(?m)^\\s+$", "");
-        cleaned = cleaned.replaceAll("\n{3,}", "\n\n");
+        cleaned = PTR_DBL_SPACE.matcher(cleaned).replaceAll(" ");
+        cleaned = PTR_EMPTY.matcher(cleaned).replaceAll("");
+        cleaned = PTR_TABL.matcher(cleaned).replaceAll("\n\n");
         return cleaned.strip();
     }
 
@@ -330,8 +358,8 @@ public final class DiscordMdExporter {
         return value.replace("|", "/");
     }
 
-    private static List<String> loadRemovalTerms() {
-        try (InputStream inputStream = DiscordMdExporter.class.getResourceAsStream("/words.txt")) {
+    private static List<String> loadRemovalTerms(String from) {
+        try (InputStream inputStream = DiscordMdExporter.class.getResourceAsStream(from)) {
             if (inputStream == null) {
                 return List.of();
             }

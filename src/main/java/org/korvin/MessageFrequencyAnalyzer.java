@@ -27,7 +27,7 @@ import java.util.stream.Stream;
 public final class MessageFrequencyAnalyzer {
 
     private static final int MIN_CONTENT_LENGTH = 180;
-    private static final int RESULT_LIMIT = 256+64;
+    private static final int RESULT_LIMIT = 256+128;
 
     private final DiscordMdExporter exporter;
 
